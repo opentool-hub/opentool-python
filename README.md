@@ -2,7 +2,7 @@
 
 English | [中文](README-zh_CN.md)
 
-OpenTool SDK for Python provides the core building blocks to host or consume OpenTool-compatible tools in Python: an HTTP/JSON-RPC server runtime, an HTTP client with unary + SSE streaming calls, and a JSON schema loader. This project is designed to align with `../opentool-dart` so multi-language SDK behavior stays consistent.
+OpenTool SDK for Python provides the core building blocks to host or consume OpenTool-compatible tools in Python: an HTTP/JSON-RPC server runtime, an HTTP client with unary + SSE streaming calls, and a JSON schema loader. This project is designed to align with [opentool-dart](https://github.com/opentool-hub/opentool-dart) so multi-language SDK behavior stays consistent.
 
 ## Library Entrypoints
 
@@ -23,6 +23,12 @@ OpenTool SDK for Python provides the core building blocks to host or consume Ope
 - Schema validation uses `jsonschema` and `referencing`, installed with the SDK.
 
 ## Installation
+
+Install from PyPI:
+
+```sh
+python -m pip install opentool-python
+```
 
 Install as editable package in local development:
 

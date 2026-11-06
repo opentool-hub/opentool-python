@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-OpenTool Python SDK 提供在 Python 中托管或调用 OpenTool 兼容 Tool 的核心能力：HTTP/JSON-RPC 服务端运行时、支持普通调用 + SSE 流式调用的客户端，以及 JSON 规范加载器。该项目的目标是与 `../opentool-dart` 对齐，便于多语言 SDK 保持一致行为。
+OpenTool Python SDK 提供在 Python 中托管或调用 OpenTool 兼容 Tool 的核心能力：HTTP/JSON-RPC 服务端运行时、支持普通调用 + SSE 流式调用的客户端，以及 JSON 规范加载器。该项目的目标是与 [opentool-dart](https://github.com/opentool-hub/opentool-dart) 对齐，便于多语言 SDK 保持一致行为。
 
 ## 库入口
 
@@ -23,6 +23,12 @@ OpenTool Python SDK 提供在 Python 中托管或调用 OpenTool 兼容 Tool 的
 - 安装 SDK 时会安装 Schema 校验依赖 `jsonschema` 和 `referencing`。
 
 ## 安装
+
+从 PyPI 安装：
+
+```sh
+python -m pip install opentool-python
+```
 
 本地开发建议使用可编辑安装：
 
