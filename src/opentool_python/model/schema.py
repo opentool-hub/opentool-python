@@ -1,7 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from copy import deepcopy
+from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote, unquote
+
+from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.validators import validator_for
+from referencing import Registry, Resource
+from referencing.exceptions import NoSuchResource
+from referencing.jsonschema import DRAFT202012
+
+
+SchemaValue = dict[str, Any] | bool
+SchemaReferenceResolver = Callable[[str], SchemaValue | None]
+_LOCAL_PREFIX = "https://opentool.invalid/schemas/"
 
 
 class SchemaType:
@@ -11,114 +25,227 @@ class SchemaType:
     STRING = "string"
     ARRAY = "array"
     OBJECT = "object"
-
-
-class SchemasSingleton:
-    _schemas: dict[str, "Schema"] = {}
-
-    @classmethod
-    def init_instance(cls, schemas_json: dict[str, Any]) -> None:
-        cls._schemas = {}
-        for schema_name, schema_map in schemas_json.items():
-            if isinstance(schema_map, dict) and "$ref" not in schema_map:
-                cls._schemas[schema_name] = Schema.from_json(schema_map)
-
-    @classmethod
-    def get_instance(cls) -> dict[str, "Schema"]:
-        return cls._schemas
+    NULL = "null"
 
 
 @dataclass
-class Schema:
-    type: str
-    description: str | None = None
-    properties: dict[str, "Schema"] | None = None
-    items: "Schema" | None = None
-    enum_: list[Any] | None = None
-    required: list[str] | None = None
+class SchemaValidationResult:
+    valid: bool
+    errors: list[str]
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def is_valid(self) -> bool:
+        return self.valid
+
+
+class SchemaResolver:
+    def __init__(
+        self,
+        definitions: dict[str, SchemaValue] | None = None,
+        reference_resolver: SchemaReferenceResolver | None = None,
+    ) -> None:
+        self._definitions = deepcopy(definitions) if definitions is not None else {}
+
+        def retrieve(uri: str) -> Resource:
+            value = reference_resolver(uri) if reference_resolver is not None else None
+            if value is None:
+                raise NoSuchResource(ref=uri)
+            return self._resource(value)
+
+        self.registry = Registry(retrieve=retrieve).with_resources(
+            (_LOCAL_PREFIX + quote(name, safe=""), self._resource(value))
+            for name, value in self._definitions.items()
+        )
+
+    def resolve_all(self) -> dict[str, Schema]:
+        return {name: Schema.from_json(value, resolver=self) for name, value in self._definitions.items()}
+
+    def _resource(self, value: SchemaValue) -> Resource:
+        if not isinstance(value, (dict, bool)):
+            raise ValueError("Expected a JSON Schema object or boolean")
+        return Resource.from_contents(self.normalize(value), default_specification=DRAFT202012)
+
+    def keyword_view(self, value: dict[str, Any]) -> dict[str, Any]:
+        chain = [value]
+        seen = set()
+        while isinstance(ref := value.get("$ref"), str) and ref.startswith("#/schemas/"):
+            token = ref[len("#/schemas/"):]
+            if "/" in token or ref in seen:
+                break
+            seen.add(ref)
+            name = unquote(token).replace("~1", "/").replace("~0", "~")
+            target = self._definitions.get(name)
+            if not isinstance(target, dict):
+                break
+            chain.append(target)
+            value = target
+        view: dict[str, Any] = {}
+        for node in reversed(chain):
+            view.update(node)
+        return view
+
+    def normalize(self, value: SchemaValue) -> SchemaValue:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        # Only visit schema positions, leaving literal values in enum, const and annotations intact.
+        for key in ("$ref", "$dynamicRef", "$recursiveRef"):
+            ref = value.get(key)
+            if isinstance(ref, str) and ref.startswith("#/schemas/"):
+                token, separator, rest = ref[len("#/schemas/"):].partition("/")
+                name = unquote(token).replace("~1", "/").replace("~0", "~")
+                if name not in self._definitions:
+                    raise ValueError(f"Unknown OpenTool schema reference: {ref}")
+                normalized[key] = _LOCAL_PREFIX + quote(name, safe="") + (f"#/{rest}" if separator else "")
+        for key in ("$defs", "definitions", "properties", "patternProperties", "dependentSchemas", "dependencies"):
+            if isinstance(value.get(key), dict):
+                normalized[key] = {name: self.normalize(node) for name, node in value[key].items()}
+        for key in ("allOf", "anyOf", "oneOf", "prefixItems", "items"):
+            if isinstance(value.get(key), list):
+                normalized[key] = [self.normalize(node) for node in value[key]]
+        for key in (
+            "additionalProperties", "unevaluatedProperties", "items", "additionalItems",
+            "unevaluatedItems", "contains", "propertyNames", "not", "if", "then", "else", "contentSchema",
+        ):
+            if isinstance(value.get(key), (dict, bool)):
+                normalized[key] = self.normalize(value[key])
+        return normalized
+
+
+class SchemasSingleton:
+    """Legacy registry for standalone Schema.from_json callers."""
+
+    _resolver = SchemaResolver()
+    _schemas: dict[str, Schema] = {}
 
     @classmethod
-    def from_json(cls, data: dict[str, Any]) -> "Schema":
-        ref = data.get("$ref")
-        if isinstance(ref, str):
-            schema = cls._from_ref(ref)
-            schema._validate_enum_consistency()
-            return schema
+    def init_instance(cls, schemas_json: dict[str, SchemaValue]) -> None:
+        resolver = SchemaResolver(schemas_json)
+        schemas = resolver.resolve_all()
+        cls._resolver = resolver
+        cls._schemas = schemas
 
-        properties: dict[str, Schema] | None = None
-        raw_properties = data.get("properties")
-        if isinstance(raw_properties, dict):
-            properties = {
-                k: cls.from_json(v)
-                for k, v in raw_properties.items()
-                if isinstance(v, dict)
-            }
+    @classmethod
+    def get_instance(cls) -> dict[str, Schema]:
+        return dict(cls._schemas)
 
-        items: Schema | None = None
-        raw_items = data.get("items")
-        if isinstance(raw_items, dict):
-            items = cls.from_json(raw_items)
 
-        schema = cls(
-            type=str(data["type"]),
-            description=data.get("description"),
-            properties=properties,
-            items=items,
-            enum_=data.get("enum"),
-            required=data.get("required"),
-        )
-        schema._validate_enum_consistency()
+class Schema:
+    def __init__(
+        self,
+        type: str | list[str],
+        description: str | None = None,
+        properties: dict[str, Schema] | None = None,
+        items: Schema | None = None,
+        enum_: list[Any] | None = None,
+        required: list[str] | None = None,
+        **keywords: Any,
+    ) -> None:
+        value = {"type": type, **keywords}
+        if description is not None:
+            value["description"] = description
+        if properties is not None:
+            value["properties"] = {key: schema.to_json() for key, schema in properties.items()}
+        if items is not None:
+            value["items"] = items.to_json()
+        if enum_ is not None:
+            value["enum"] = enum_
+        if required is not None:
+            value["required"] = required
+        self._initialize(value, SchemaResolver())
+
+    @classmethod
+    def from_json(cls, data: SchemaValue, *, resolver: SchemaResolver | None = None) -> Schema:
+        schema = cls.__new__(cls)
+        schema._initialize(data, resolver if resolver is not None else SchemasSingleton._resolver)
         return schema
 
-    def to_json(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {"type": self.type}
-        if self.description is not None:
-            payload["description"] = self.description
-        if self.properties is not None:
-            payload["properties"] = {
-                key: schema.to_json() for key, schema in self.properties.items()
-            }
-        if self.items is not None:
-            payload["items"] = self.items.to_json()
-        if self.enum_ is not None:
-            payload["enum"] = self.enum_
-        if self.required is not None:
-            payload["required"] = self.required
-        return payload
+    def _initialize(self, data: SchemaValue, resolver: SchemaResolver) -> None:
+        if not isinstance(data, (dict, bool)):
+            raise ValueError("Expected a JSON Schema object or boolean")
+        self._json = deepcopy(data)
+        self._resolver = resolver
+        normalized = resolver.normalize(self._json)
+        validator_class = validator_for(normalized, default=Draft202012Validator)
+        validator_class.check_schema(normalized)
+        self._validator = validator_class(normalized, registry=resolver.registry)
+        self._format_validator = self._validator.evolve(format_checker=validator_class.FORMAT_CHECKER or FormatChecker())
 
-    @staticmethod
-    def _from_ref(ref: str) -> "Schema":
-        parts = ref.split("/")
-        if len(parts) == 3 and parts[0] == "#" and parts[1] == "schemas":
-            ref_name = parts[2]
-            schema = SchemasSingleton.get_instance().get(ref_name)
-            if schema is None:
-                raise ValueError(f"#ref not found: {ref}")
-            return schema
-        raise ValueError(f"#ref format exception: {ref}")
+    @property
+    def is_boolean_schema(self) -> bool:
+        return isinstance(self._json, bool)
 
-    def _validate_enum_consistency(self) -> None:
-        if not self.enum_:
-            return
-        for index, value in enumerate(self.enum_):
-            if not self._is_value_consistent_with_type(value):
-                raise ValueError(
-                    f'Enum value at index {index} ("{value}") '
-                    f'does not match schema type "{self.type}".'
-                )
+    @property
+    def raw_schema(self) -> SchemaValue:
+        return self.to_json()
 
-    def _is_value_consistent_with_type(self, value: Any) -> bool:
-        if self.type == "string":
-            return isinstance(value, str) or value is None
-        if self.type == "integer":
-            return (isinstance(value, int) and not isinstance(value, bool)) or value is None
-        if self.type == "number":
-            return (
-                (isinstance(value, (int, float)) and not isinstance(value, bool))
-                or value is None
-            )
-        if self.type == "boolean":
-            return isinstance(value, bool) or value is None
-        if self.type == "null":
-            return value is None
-        return True
+    def __getitem__(self, keyword: str) -> Any:
+        if not isinstance(self._json, dict):
+            return None
+        if keyword in self._json:
+            return deepcopy(self._json[keyword])
+        return deepcopy(self._resolver.keyword_view(self._json).get(keyword))
+
+    @property
+    def has_type(self) -> bool:
+        return self["type"] is not None
+
+    @property
+    def type(self) -> str:
+        value = self["type"]
+        if isinstance(value, list):
+            return value[0] if value else ""
+        return value if isinstance(value, str) else ""
+
+    @property
+    def type_union(self) -> list[str] | None:
+        value = self["type"]
+        return value if isinstance(value, list) else None
+
+    @property
+    def description(self) -> str | None:
+        return self["description"]
+
+    @property
+    def enum_(self) -> list[Any] | None:
+        return self["enum"]
+
+    @property
+    def required(self) -> list[str] | None:
+        return self["required"]
+
+    @property
+    def properties(self) -> dict[str, Schema] | None:
+        properties = self["properties"]
+        if properties is None:
+            return None
+        return {key: self._child(node) for key, node in properties.items()}
+
+    @property
+    def items(self) -> Schema | list[Schema] | None:
+        items = self["items"]
+        if isinstance(items, list):
+            return [self._child(node) for node in items]
+        return self._child(items) if items is not None else None
+
+    def _child(self, node: SchemaValue) -> Schema:
+        child = self.__class__.__new__(self.__class__)
+        child._json = node
+        child._resolver = self._resolver
+        normalized = self._resolver.normalize(node)
+        child._validator = self._validator.evolve(schema=normalized)
+        child._format_validator = self._format_validator.evolve(schema=normalized)
+        return child
+
+    def to_json(self) -> SchemaValue:
+        return deepcopy(self._json)
+
+    def validate(self, instance: Any, *, validate_formats: bool = False) -> SchemaValidationResult:
+        validator = self._format_validator if validate_formats else self._validator
+        errors = [f"{error.json_path}: {error.message}" for error in validator.iter_errors(instance)]
+        return SchemaValidationResult(valid=not errors, errors=errors)
+
+    def is_valid(self, instance: Any, *, validate_formats: bool = False) -> bool:
+        validator = self._format_validator if validate_formats else self._validator
+        return validator.is_valid(instance)

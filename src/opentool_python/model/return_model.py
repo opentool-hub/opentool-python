@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .schema import Schema
+from .schema import Schema, SchemaResolver
 
 
 @dataclass
@@ -13,10 +13,10 @@ class Return:
     description: str | None = None
 
     @classmethod
-    def from_json(cls, data: dict[str, Any]) -> "Return":
+    def from_json(cls, data: dict[str, Any], *, schema_resolver: SchemaResolver | None = None) -> "Return":
         return cls(
             name=str(data["name"]),
-            schema=Schema.from_json(data["schema"]),
+            schema=Schema.from_json(data["schema"], resolver=schema_resolver),
             description=data.get("description"),
         )
 

@@ -20,7 +20,7 @@ OpenTool Python SDK 提供在 Python 中托管或调用 OpenTool 兼容 Tool 的
 ## 环境要求
 
 - Python `>=3.10`
-- 运行时无强制第三方依赖（当前实现基于 Python 标准库）。
+- 安装 SDK 时会安装 Schema 校验依赖 `jsonschema` 和 `referencing`。
 
 ## 安装
 
@@ -110,7 +110,7 @@ print(client.stop().to_json())
   - `GET /version`
   - `POST /call`
   - `POST /streamCall`
-  - `GET /load`
+  - `GET /load` 在工具没有元数据时返回 HTTP 404，错误码为 `TOOL_NOT_FOUND`。
   - `POST /stop`
 - 内置 CLI 参数（`CliArguments`）：
   - `--opentoolServerTag`
@@ -125,6 +125,10 @@ print(client.stop().to_json())
 - `OpenToolJsonLoader().load_from_file(path)` 会从文件加载并解析 `#/schemas/*` 的 `$ref`。
 - `OpenToolJsonLoader().load(json_string)` 支持从字符串解析。
 - 规范定义见：[OpenTool Spec](https://github.com/opentool-hub/opentool-spec)。
+
+Schema 默认采用 JSON Schema Draft 2020-12，也可通过 `$schema` 选择已支持的版本。`Schema.to_json()` 返回字典或布尔值，并保留引用、注解和扩展关键字。`#/schemas/...` 引用在各自的 OpenTool 文档内解析，文件和 HTTP 加载采用同一规则。
+
+用 `schema.validate(value)` 获取校验结果及错误，或用 `schema.is_valid(value)` 判断是否有效。传入 `validate_formats=True` 可启用格式校验。需要解析外部 Schema 时，向 `OpenTool.from_json`、`OpenToolJsonLoader` 或 `OpenToolClient` 传入同步的 `schema_reference_resolver` 回调。回调接收资源 URI，返回字典、布尔值或表示资源不存在的 `None`。
 
 ## 示例与开发
 

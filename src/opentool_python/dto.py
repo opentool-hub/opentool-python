@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 JSONRPC_VERSION = "2.0"
+LOAD_METADATA_NOT_FOUND_CODE = "TOOL_NOT_FOUND"
+LOAD_METADATA_NOT_FOUND_MESSAGE = "Tool metadata not found"
 DEFAULT_PREFIX = "/opentool"
 DEFAULT_TOOL_TAG = "N/A"
 DEFAULT_TOOL_HOST = "0.0.0.0"
@@ -40,19 +42,23 @@ class JsonRPCHttpRequestBody:
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "JsonRPCHttpRequestBody":
-        return cls(
-            method=str(data["method"]),
-            params=data.get("params"),
-            id=str(data["id"]),
-            jsonrpc=str(data.get("jsonrpc", JSONRPC_VERSION)),
-        )
+        method, request_id = data["method"], data["id"]
+        params = data.get("params")
+        version = data.get("jsonrpc", JSONRPC_VERSION)
+        if not isinstance(method, str) or not isinstance(request_id, str):
+            raise ValueError("method and id must be strings")
+        if params is not None and not isinstance(params, dict):
+            raise ValueError("params must be an object or null")
+        if not isinstance(version, str):
+            raise ValueError("jsonrpc must be a string")
+        return cls(method=method, params=params, id=request_id, jsonrpc=version)
 
     def to_json(self) -> dict[str, Any]:
         return {
             "jsonrpc": self.jsonrpc,
             "method": self.method,
-            "params": self.params,
             "id": self.id,
+            **({"params": self.params} if self.params is not None else {}),
         }
 
 

@@ -4,7 +4,7 @@ from .info import Info
 from .opentool import OpenTool
 from .parameter import Parameter
 from .return_model import Return
-from .schema import Schema, SchemaType
+from .schema import Schema, SchemaReferenceResolver, SchemaResolver, SchemaType, SchemaValidationResult
 from .server import ServerConfig
 
 __all__ = [
@@ -16,5 +16,8 @@ __all__ = [
     "Return",
     "Schema",
     "SchemaType",
+    "SchemaReferenceResolver",
+    "SchemaResolver",
+    "SchemaValidationResult",
     "ServerConfig",
 ]

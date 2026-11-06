@@ -25,7 +25,7 @@ from .model.info import Info
 from .model.opentool import OpenTool
 from .model.parameter import Parameter
 from .model.return_model import Return
-from .model.schema import Schema, SchemaType
+from .model.schema import Schema, SchemaReferenceResolver, SchemaResolver, SchemaType, SchemaValidationResult
 from .model.server import ServerConfig
 
 __all__ = [
@@ -54,6 +54,9 @@ __all__ = [
     "Return",
     "Schema",
     "SchemaType",
+    "SchemaReferenceResolver",
+    "SchemaResolver",
+    "SchemaValidationResult",
     "ServerConfig",
     "OpenToolJsonLoader",
 ]

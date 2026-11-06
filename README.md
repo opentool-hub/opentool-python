@@ -20,7 +20,7 @@ OpenTool SDK for Python provides the core building blocks to host or consume Ope
 ## Requirements
 
 - Python `>=3.10`
-- No required runtime dependencies (current implementation uses Python stdlib only).
+- Schema validation uses `jsonschema` and `referencing`, installed with the SDK.
 
 ## Installation
 
@@ -110,7 +110,7 @@ print(client.stop().to_json())
   - `GET /version`
   - `POST /call`
   - `POST /streamCall`
-  - `GET /load`
+  - `GET /load` returns HTTP 404 with code `TOOL_NOT_FOUND` when metadata is unavailable.
   - `POST /stop`
 - Built-in CLI flags (via `CliArguments`):
   - `--opentoolServerTag`
@@ -125,6 +125,18 @@ print(client.stop().to_json())
 - `OpenToolJsonLoader().load_from_file(path)` loads local files and resolves `$ref` entries under `#/schemas/*`.
 - `OpenToolJsonLoader().load(json_string)` loads from raw JSON strings.
 - Specification reference: [OpenTool Spec](https://github.com/opentool-hub/opentool-spec).
+
+Schemas default to JSON Schema Draft 2020-12. A recognized `$schema` selects its declared draft. `Schema.to_json()` returns a dictionary or boolean and preserves references, annotations, and extension keywords. Named `#/schemas/...` references are scoped to each OpenTool document, including documents loaded over HTTP.
+
+```python
+from opentool_python.opentool_schema import Schema
+
+schema = Schema.from_json({"type": "string", "minLength": 3})
+result = schema.validate("ab")
+print(result.is_valid, result.errors)
+```
+
+Use `validate_formats=True` to assert formats. To supply external schemas, pass a synchronous `schema_reference_resolver` callback to `OpenTool.from_json`, `OpenToolJsonLoader`, or `OpenToolClient`. The callback receives the resource URI and returns an object, a boolean, or `None` if unavailable.
 
 ## Examples and Development
 

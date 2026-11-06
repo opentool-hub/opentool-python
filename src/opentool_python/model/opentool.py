@@ -5,7 +5,7 @@ from typing import Any
 
 from .function_model import FunctionModel
 from .info import Info
-from .schema import Schema
+from .schema import Schema, SchemaReferenceResolver, SchemaResolver
 from .server import ServerConfig
 
 
@@ -18,24 +18,28 @@ class OpenTool:
     schemas: dict[str, Schema] | None = None
 
     @classmethod
-    def from_json(cls, data: dict[str, Any]) -> "OpenTool":
+    def from_json(
+        cls,
+        data: dict[str, Any],
+        *,
+        schema_reference_resolver: SchemaReferenceResolver | None = None,
+    ) -> "OpenTool":
         raw_schemas = data.get("schemas")
-        schemas: dict[str, Schema] | None = None
-        if isinstance(raw_schemas, dict):
-            schemas = {
-                name: Schema.from_json(schema)
-                for name, schema in raw_schemas.items()
-                if isinstance(schema, dict)
-            }
+        if raw_schemas is not None and not isinstance(raw_schemas, dict):
+            raise ValueError("schemas: expected an object")
+        schema_resolver = SchemaResolver(raw_schemas, schema_reference_resolver)
+        schemas = schema_resolver.resolve_all() if raw_schemas is not None else None
+        functions = data["functions"]
+        if not isinstance(functions, list) or any(not isinstance(item, dict) for item in functions):
+            raise ValueError("functions: expected an array of objects")
 
         return cls(
             opentool=str(data["opentool"]),
             info=Info.from_json(data["info"]),
             server=ServerConfig.from_json(data["server"]) if isinstance(data.get("server"), dict) else None,
             functions=[
-                FunctionModel.from_json(item)
-                for item in data.get("functions", [])
-                if isinstance(item, dict)
+                FunctionModel.from_json(item, schema_resolver=schema_resolver)
+                for item in functions
             ],
             schemas=schemas,
         )

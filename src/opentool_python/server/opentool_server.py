@@ -19,6 +19,8 @@ from ..dto import (
     DEFAULT_TOOL_PORT,
     DEFAULT_TOOL_TAG,
     JSONRPC_VERSION,
+    LOAD_METADATA_NOT_FOUND_CODE,
+    LOAD_METADATA_NOT_FOUND_MESSAGE,
     JsonRPCHttpRequestBody,
     JsonRPCHttpResponseBody,
     JsonRPCHttpResponseBodyError,
@@ -26,7 +28,6 @@ from ..dto import (
     StatusType,
     Version,
 )
-from ..tool.exceptions import JsonParserException
 from ..tool.model import EventType
 from .cli_arguments import CliArguments
 from .cli_tool import CliTool
@@ -93,8 +94,13 @@ class OpenToolServer(Server):
                 if path == f"{server.prefix}/load":
                     try:
                         open_tool = server.cli_tool.load()
-                        body = open_tool.to_json() if open_tool is not None else JsonParserException().to_json()
-                        self._respond_json(HTTPStatus.OK, body)
+                        if open_tool is None:
+                            self._respond_json(
+                                HTTPStatus.NOT_FOUND,
+                                {"code": LOAD_METADATA_NOT_FOUND_CODE, "message": LOAD_METADATA_NOT_FOUND_MESSAGE},
+                            )
+                        else:
+                            self._respond_json(HTTPStatus.OK, open_tool.to_json())
                     except Exception as exc:
                         self._respond_json(
                             HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -168,13 +174,17 @@ class OpenToolServer(Server):
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache, no-store")
-                self.send_header("Connection", "keep-alive")
+                self.send_header("Connection", "close")
                 self.end_headers()
 
                 self._push_data(EventType.START, json.dumps({EventType.START: body.method}))
 
+                failed = False
                 try:
                     def send_event(event: str, data: dict[str, Any]) -> None:
+                        nonlocal failed
+                        if failed:
+                            return
                         if event == EventType.DATA:
                             response_body = JsonRPCHttpResponseBody(result=data, id=body.id)
                             self._push_data(event, json.dumps(response_body.to_json()))
@@ -185,15 +195,20 @@ class OpenToolServer(Server):
                             )
                             response_body = JsonRPCHttpResponseBody(result={}, id=body.id, error=error)
                             self._push_data(event, json.dumps(response_body.to_json()))
+                            failed = True
 
                     server.cli_tool.stream_call(body.method, body.params, send_event)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
                 except Exception as exc:
-                    self._push_data(
-                        EventType.ERROR,
-                        json.dumps({"code": 500, "message": str(exc), "id": body.id}),
-                    )
-                finally:
-                    self._push_data(EventType.DONE, json.dumps({EventType.DONE: body.method}))
+                    if not failed:
+                        self._push_data(
+                            EventType.ERROR,
+                            json.dumps({"code": 500, "message": str(exc), "id": body.id}),
+                        )
+                else:
+                    if not failed:
+                        self._push_data(EventType.DONE, json.dumps({EventType.DONE: body.method}))
 
             def _handle_stop(self) -> None:
                 try:
